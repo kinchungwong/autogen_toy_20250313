@@ -51,7 +51,7 @@ class SimdSpellcheck(Collection[str]):
         return self._keyword_lookup
 
     def wildcard(self, spec: str) -> list[str]:
-        p0 = re.compile("[0-9a-zA-Z_?*]+")
+        p0 = self._re_compile("[0-9a-zA-Z_?*]+")
         if not p0.fullmatch(spec):
             raise ValueError("The spec must be a string of alphanumeric characters, underscores, question marks (each matching a single character), and asterisks (each matching a sequence of characters).")
         if '?' in spec:
