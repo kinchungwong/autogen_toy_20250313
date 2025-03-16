@@ -1,10 +1,19 @@
 from typing import Optional
 import os
+from os.path import join as _pathjoin
 import tempfile
 import subprocess
 import itertools
+import shutil
+from dataclasses import dataclass
 
-from intel_simd_knowledge_toy.data_tools.intel_manual_extract.utils import PdfPageRange
+
+from intel_simd_knowledge_toy.data_tools.intel_manual_extract.utils import (
+    PdfPageRange,
+    DirtyPage,
+    CleanedPage,
+)
+
 from intel_simd_knowledge_toy.data_tools.intel_manual_extract.text_cleanup import (
     TextCleanup, 
     TextCleanupProfile,
@@ -65,88 +74,193 @@ class PdfManualExtract:
         self._pages_profile = pages_profile or self._PAGES_PROFILE
         self._pdfpage_filenames = None
         self._cleanpage_filenames = None
+        self._temp_src = tempfile.TemporaryDirectory(suffix="_src")
+        self._temp_bin = tempfile.TemporaryDirectory(suffix="_bin")
+        self._temp_txt = tempfile.TemporaryDirectory(suffix="_txt")
+        self._temp_out = tempfile.TemporaryDirectory(suffix="_out")
 
-    def _run_toc_bash(self):
+    def run(self):
+        """Runs the extraction process.
+        """
+        with self._temp_src as temp_src, self._temp_bin as temp_bin, self._temp_txt as temp_txt, self._temp_out as temp_out:
+            pdf_copy_path = _pathjoin(temp_src, "input.pdf")
+            toc_bash_path = _pathjoin(temp_bin, "toc.sh")
+            toc_dirty_path = _pathjoin(temp_txt, "toc.txt")
+            toc_clean_path = _pathjoin(temp_txt, "toc_clean.txt")
+            pages_bash_path = _pathjoin(temp_bin, "pages.sh")
+            dirty_pages = list[DirtyPage]()
+            clean_pages = list[CleanedPage]()
+            self._copy_pdf(self._pdf_path, pdf_copy_path)
+            self._create_toc_bash(toc_bash_path, pdf_copy_path, self._toc_range, toc_dirty_path)
+            self._run_toc_bash(toc_bash_path)
+            self._clean_toc(toc_dirty_path, toc_clean_path)
+            self._create_pages_bash(pages_bash_path, pdf_copy_path, self._page_range, temp_txt, dirty_pages)
+            self._run_pages_bash(pages_bash_path)
+            self._clean_pages(dirty_pages, temp_txt, clean_pages)
+            self._remove_dirty_files(toc_dirty_path, dirty_pages)
+            self._move_clean_files(toc_clean_path, clean_pages, self._data_dir)
+
+    def _copy_pdf(self, pdf_path: str, pdf_copy_path: str) -> None:
+        """Copies the PDF file to the temporary source directory.
+        """
+        os.link(pdf_path, pdf_copy_path)
+        
+    def _create_toc_bash(
+        self, 
+        toc_bash_path: str, 
+        pdf_input_path: str, 
+        toc_range: PdfPageRange, 
+    toc_dirty_path: str) -> None:
         """Creates a bash script which extracts the TOC page range into a single text file.
         """
-        ntf_args = {
-            "mode": "wt",
-            "delete": True, 
-            "delete_on_close": False,
-        }
-        toc_first = self._toc_range.first
-        toc_last = self._toc_range.last
-        pdf_path = self._pdf_path
-        toc_txt_path = os.path.join(self._data_dir, "toc.txt")
+        toc_first = toc_range.first
+        toc_last = toc_range.last
         bash_lines = [
             '''#!/bin/bash -ex''',
-            f"pdftotext -layout -f {toc_first} -l {toc_last} {pdf_path} {toc_txt_path}",
+            f"pdftotext -layout -f {toc_first} -l {toc_last} {pdf_input_path} {toc_dirty_path}",
         ]
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ntf_args["dir"] = tmpdir
-            with tempfile.NamedTemporaryFile(**ntf_args) as bashfile:
-                bashfile.write("\n".join(bash_lines))
-                bashfile.close()
-                subprocess.run(["chmod", "u+x", bashfile.name])
-                subprocess.run(["bash", bashfile.name])
+        with open(toc_bash_path, "wt") as f:
+            f.write("\n".join(bash_lines))
 
-    def _run_toc_clean(self):
-        toc_txt_path = os.path.join(self._data_dir, "toc.txt")
-        toc_clean_path = os.path.join(self._data_dir, "toc_clean.txt")
-        with open(toc_txt_path, "rt") as f:
+    def _run_toc_bash(self, toc_bash_path: str) -> None:
+        """Runs the TOC bash script.
+        """
+        os.chmod(toc_bash_path, 0o700)
+        subprocess.run(toc_bash_path, shell=True, check=True)
+
+    def _clean_toc(self, toc_dirty_path: str, toc_clean_path: str) -> None:
+        """Cleans the TOC text file.
+        """
+        with open(toc_dirty_path, "rt") as f:
             text = f.read().splitlines()
         cleanup = TextCleanup(text, self._toc_profile)
         cleanup.run_profile()
         with open(toc_clean_path, "wt") as f:
             f.write("\n".join(cleanup.text))
-        return cleanup
 
-    def _run_pages_bash(self):
+    def _create_pages_bash(
+        self, 
+        pages_bash_path: str, 
+        pdf_input_path: str, 
+        page_range: PdfPageRange, 
+        temp_txt: str,
+        dirty_pages: list[DirtyPage],
+    ) -> None:
         """Creates a bash script which extracts the remaining pages range into single page text files.
+        Args:
+            temp_txt: The temporary text directory.
+            pages_dirty_paths (list[DirtyPage], mutable): List for collecting the paths of extracted text files.
         """
-        ntf_args = {
-            "mode": "wt",
-            "delete": True, 
-            "delete_on_close": False,
-        }
-        pdf_path = self._pdf_path
+        page_first = page_range.first
+        page_last = page_range.last
         bash_lines = [
             '''#!/bin/bash -ex''',
         ]
-        page_first = self._toc_range.last + 1
-        page_last = self._page_range.last
-        pdfpage_filenames = list[str]()
         for pdf_pagenum in range(page_first, page_last + 1):
-            txt_path = os.path.join(self._data_dir, f"page_{pdf_pagenum:04d}.txt")
-            pdfpage_filenames.append(txt_path)
-            bash_lines.append(f"pdftotext -layout -f {pdf_pagenum} -l {pdf_pagenum} {pdf_path} {txt_path}")
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ntf_args["dir"] = tmpdir
-            with tempfile.NamedTemporaryFile(**ntf_args) as bashfile:
-                bashfile.write("\n".join(bash_lines))
-                bashfile.close()
-                subprocess.run(["chmod", "u+x", bashfile.name])
-                subprocess.run(["bash", bashfile.name])
-        self._pdfpage_filenames = pdfpage_filenames
+            page_txt_path = _pathjoin(temp_txt, f"page_{pdf_pagenum:05d}.txt")
+            dirty_pages.append(DirtyPage(
+                pdf_pagenum=pdf_pagenum,
+                dirty_filename=page_txt_path,
+            ))
+            bash_lines.append(f"pdftotext -layout -f {pdf_pagenum} -l {pdf_pagenum} {pdf_input_path} {page_txt_path}")
+        with open(pages_bash_path, "wt") as f:
+            f.write("\n".join(bash_lines))
 
-    def _run_pages_clean(self):
-        cleanpage_filenames = list[str]()
-        for txt_path in self._pdfpage_filenames:
-            with open(txt_path, "rt") as f:
+    def _run_pages_bash(self, pages_bash_path: str):
+        """Runs the pages bash script.
+        """
+        os.chmod(pages_bash_path, 0o700)
+        subprocess.run(pages_bash_path, shell=True, check=True)
+
+    def _clean_pages(
+        self, 
+        dirty_pages: list[DirtyPage], 
+        temp_txt: str, 
+        clean_pages: list[CleanedPage],
+    ) -> None:
+        """Cleans the page text files.
+        Args:
+            pages_dirty_paths (list[str]): List of paths to the extracted text files.
+            temp_txt (str): The temporary text directory for writing cleaned files.
+            clean_pages (list[CleanedPage], mutable): List for collecting the cleaned page information.
+        """
+        for dirty_page in dirty_pages:
+            pdf_pagenum = dirty_page.pdf_pagenum
+            pdf_pagenum_str = f"{pdf_pagenum:05d}"
+            page_dirty_path = dirty_page.dirty_filename
+            with open(page_dirty_path, "rt") as f:
                 text = f.read().splitlines()
             cleanup = TextCleanup(text, self._pages_profile)
             cleanup.run_profile()
             lines = cleanup.text
-            if cleanup.page_id is None:
-                raise ValueError(f"Page ID not found in {txt_path}")
-            cleanpage_filename = os.path.join(self._data_dir, f"clean_{cleanup.page_id}.txt")
-            cleanpage_filenames.append(cleanpage_filename)
+            ### NOTE: extracted page_id is not guaranteed to be unique or even present
+            ### NOTE: output filenames must be unique
+            page_id = cleanup.page_id
+            page_title = cleanup.page_title
+            if page_id is None:
+                print(f"Unable to extract page ID from {page_dirty_path}, pdf page {pdf_pagenum}")
+                page_id = pdf_pagenum_str
+            if page_title is None:
+                page_title = f"Page {pdf_pagenum}"
+            page_id = self._fs_safe_str(page_id)
+            page_clean_path = _pathjoin(temp_txt, f"clean_{pdf_pagenum_str}_{page_id}.txt")
             cleanpage_header = [
-                "Page ID: " + cleanup.page_id,
-                "Page title: " + cleanup.page_title,
+                "Page ID: " + page_id,
+                "Page title: " + page_title,
                 "",
                 "---",
                 "",
             ]
-            with open(cleanpage_filename, "wt") as f:
-                f.write("\n".join(itertools.chain(cleanpage_header, lines)))
+            with open(page_clean_path, "wt") as f:
+                f.write("\n".join(itertools.chain(
+                    cleanpage_header, 
+                    lines,
+                )))
+            clean_pages.append(CleanedPage(
+                pdf_pagenum=pdf_pagenum,
+                page_id=page_id,
+                page_title=page_title,
+                header=cleanpage_header,
+                text=lines,
+                dirty_filename=page_dirty_path,
+                clean_filename=page_clean_path,
+            ))
+
+    def _remove_dirty_files(self, toc_dirty_path: str, dirty_pages: list[DirtyPage]) -> None:
+        """Removes the dirty text files.
+        Args:
+            toc_dirty_path (str): The path to the TOC dirty text file.
+            dirty_pages (list[DirtyPage]): List of paths to the extracted text files.
+        """
+        os.remove(toc_dirty_path)
+        for dirty_page in dirty_pages:
+            os.remove(dirty_page.dirty_filename)
+
+    def _move_clean_files(
+        self, 
+        toc_clean_path: str, 
+        clean_pages: list[CleanedPage], 
+        data_dir: str,
+    ) -> None:
+        """Moves the cleaned text files to the user-specified data directory.
+        Args:
+            toc_clean_path (str): The path to the cleaned TOC text file.
+            clean_pages (list[CleanedPage]): List of cleaned page information.
+            data_dir (str): The path to the data directory.
+        """
+        toc_final_path = _pathjoin(data_dir, "toc.txt")
+        shutil.move(toc_clean_path, toc_final_path)
+        for clean_page in clean_pages:
+            pdf_pagenum = clean_page.pdf_pagenum
+            page_id = clean_page.page_id
+            page_final_path = _pathjoin(data_dir, f"{pdf_pagenum}_{page_id}.txt")
+            shutil.move(clean_page.clean_filename, page_final_path)
+
+    @staticmethod
+    def _fs_safe_str(s: str) -> str:
+        """Returns a filesystem-safe version of the input string.
+        """
+        return "".join((
+            c if any((c.isalnum(), c in ('-', '_'))) else "_" 
+            for c in (s or "_")
+        ))
