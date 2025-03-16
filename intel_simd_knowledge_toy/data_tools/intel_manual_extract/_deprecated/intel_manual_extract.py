@@ -15,7 +15,7 @@ from intel_simd_knowledge_toy.data_tools.intel_manual_extract.utils import (
     CleanedPage,
 )
 
-from intel_simd_knowledge_toy.data_tools.intel_manual_extract.text_cleanup import (
+from intel_simd_knowledge_toy.data_tools.intel_manual_extract._deprecated.text_cleanup import (
     TextCleanup, 
     TextCleanupProfile,
 )
