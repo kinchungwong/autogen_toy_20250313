@@ -98,8 +98,11 @@ class PdfManualExtract:
             self._create_pages_bash(pages_bash_path, pdf_copy_path, self._page_range, temp_txt, dirty_pages)
             self._run_pages_bash(pages_bash_path)
             self._clean_pages(dirty_pages, temp_txt, clean_pages)
+            self._extract_intrinsics(clean_pages)
             self._remove_dirty_files(toc_dirty_path, dirty_pages)
             self._move_clean_files(toc_clean_path, clean_pages, self._data_dir)
+            pass
+        pass
 
     def _copy_pdf(self, pdf_path: str, pdf_copy_path: str) -> None:
         """Copies the PDF file to the temporary source directory.
@@ -226,6 +229,28 @@ class PdfManualExtract:
                 dirty_filename=page_dirty_path,
                 clean_filename=page_clean_path,
             ))
+
+    def _extract_intrinsics(self, clean_pages: list[CleanedPage]) -> None:
+        """Extracts intrinsic information from the cleaned pages.
+        Args:
+            clean_pages (list[CleanedPage]): List of cleaned page information.
+        """
+        _PATTERN = '''Intel C/C++ Compiler Intrinsic Equivalent'''
+        for clean_page in clean_pages:
+            pdf_pagenum = clean_page.pdf_pagenum
+            page_id = clean_page.page_id
+            page_title = clean_page.page_title
+            text = clean_page.text
+            is_selected = False
+            for idx, line in enumerate(text):
+                if _PATTERN in line:
+                    is_selected = True
+                    continue
+                if is_selected:
+                    if not all(c in line for c in ('(', ')', '_', 'm')):
+                        is_selected = False
+                        continue
+                    print(f"Page {pdf_pagenum} ({page_id}): {line}")
 
     def _remove_dirty_files(self, toc_dirty_path: str, dirty_pages: list[DirtyPage]) -> None:
         """Removes the dirty text files.
