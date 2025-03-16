@@ -33,11 +33,11 @@ class TextCleanup:
     page_title: Optional[str]
     page_id: Optional[str]
 
-    _LINE_IGNORED = (
+    _WHOLELINES_IGNORED = [
         "", 
         "CONTENTS", 
         "PAGE",
-    )
+    ]
 
     _RE_VOL_ROMAN = re.compile(r"^([ivx]*)\s*\bVol\. (2[A-D])\s*([ivx]*)$")
     _RE_VOL_PAGEID = re.compile(r"^(.+)\bVol\. (2[A-D])\s*([1-9A-Z]-\d{1,3})?$")
@@ -104,7 +104,8 @@ class TextCleanup:
 
     def remove_ignored(self):
         """Removes lines that are ignored, such as empty lines and table of contents headers."""
-        self.text = [line for line in self.text if line not in self._LINE_IGNORED]
+        ignore_set = set[str](self._WHOLELINES_IGNORED)
+        self.text = [line for line in self.text if line not in ignore_set]
         return self
 
     def scan_page_id(self) -> tuple[Optional[str], Optional[str]]:
