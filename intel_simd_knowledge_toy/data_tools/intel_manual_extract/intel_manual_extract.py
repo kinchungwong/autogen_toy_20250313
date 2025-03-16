@@ -1,4 +1,5 @@
-from typing import Optional
+from typing import Optional, Union
+from pathlib import Path
 import os
 from os.path import join as _pathjoin
 import tempfile
@@ -47,8 +48,8 @@ class PdfManualExtract:
 
     def __init__(
         self, 
-        pdf_path: str, 
-        data_dir: str, 
+        pdf_path: Union[str, Path], 
+        data_dir: Union[str, Path], 
         page_range: PdfPageRange,
         toc_range: PdfPageRange,
         toc_profile: Optional[TextCleanupProfile] = None,
@@ -66,8 +67,8 @@ class PdfManualExtract:
             raise FileNotFoundError(f"PDF file not found: {pdf_path}")
         if not os.path.isdir(data_dir):
             raise NotADirectoryError(f"Data directory not found: {data_dir}")
-        self._pdf_path = pdf_path
-        self._data_dir = data_dir
+        self._pdf_path = str(pdf_path)
+        self._data_dir = str(data_dir)
         self._page_range = page_range
         self._toc_range = toc_range
         self._toc_profile = toc_profile or self._TOC_PROFILE
