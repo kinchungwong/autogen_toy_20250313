@@ -64,20 +64,35 @@ class TextBall:
     def _load_text_bytes(self) -> None:
         assert self._res_text.is_present
         with self._res_text.path.open("rb") as f:
-            _bytes = f.read()
-        self._text = _bytes.decode(self._ENCODING)
+            data: bytes = f.read()
+        self._text = data.decode(self._ENCODING)
         self._post_load()
     
     def _load_pdf_bytes(self) -> None:
         assert self._res_pdf.is_present
         pdf_to_text = PdfToTextSubprocess(self._res_pdf.path)
         pdf_to_text.run()
-        self._text = pdf_to_text.data.decode(self._ENCODING)
+        data: bytes = pdf_to_text.data
+        if self._res_text.was_specified and not self._res_text.is_present:
+            try:
+                with self._res_text.path.open("wb") as f:
+                    f.write(data)
+            except Exception as e:
+                print(f"Failed to write PDF text to file: {self._res_text.path}. Error: {e}")
+        self._text = data.decode(self._ENCODING)
         self._post_load()
+
+    def _load_tarball_bytes(self) -> None:
+        assert self._res_tarball.is_present
+        raise NotImplementedError("Loading from tarball is not implemented yet.")
 
     def _post_load(self) -> None:
         if not self._text:
             return
+        self._init_data_model()
+        self._save_tarball_if_specified()
+
+    def _init_data_model(self) -> None:
         ### TODO 
         # Currently this class does not allow selecting a page range for pdftotext.
         # If this feature is ever implemented, set this value accordingly.
@@ -87,3 +102,11 @@ class TextBall:
             pdf_first_pagenum=pdf_first_pagenum,
             full_text=self._text,
         )
+
+    def _save_tarball_if_specified(self) -> None:
+        if not self._res_tarball.was_specified:
+            return
+        if self._res_tarball.is_present:
+            return
+        ### Not implemented yet
+        pass
