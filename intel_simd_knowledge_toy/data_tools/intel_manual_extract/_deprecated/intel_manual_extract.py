@@ -9,7 +9,7 @@ import shutil
 from dataclasses import dataclass
 
 
-from intel_simd_knowledge_toy.data_tools.intel_manual_extract.utils import (
+from intel_simd_knowledge_toy.data_tools.intel_manual_extract._deprecated.utils import (
     PdfPageRange,
     DirtyPage,
     CleanedPage,
