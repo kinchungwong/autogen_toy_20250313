@@ -8,6 +8,9 @@ class SimdSpellcheck(Collection[str]):
     _keyword_list: list[str]
     _keyword_set: set[str]
     _keyword_lookup: dict[str, int]
+    _morpheme_list: list[str]
+    _morpheme_set: set[str]
+    _morpheme_lookup: dict[str, int]
 
     def __init__(self):
         with open(self._FILENAME, "rt") as f:
@@ -17,6 +20,13 @@ class SimdSpellcheck(Collection[str]):
         self._keyword_lookup = {
             keyword: idx for idx, keyword in enumerate(self._keyword_list)
         }
+        self._morpheme_list = []
+        self._morpheme_set = set()
+        self._morpheme_lookup = {}
+        for keyword in self._keyword_list:
+            for morpheme in keyword.split('_'):
+                if morpheme:
+                    self._add_morpheme(morpheme)
 
     def __len__(self) -> int:
         return len(self._keyword_list)
@@ -65,3 +75,16 @@ class SimdSpellcheck(Collection[str]):
     @functools.lru_cache
     def _re_compile(cls, pattern: str) -> re.Pattern:
         return re.compile(pattern)
+
+    def _add_morpheme(self, morpheme: str) -> int:
+        idx = self._morpheme_lookup.get(morpheme, None)
+        if idx is not None:
+            return idx
+        idx = len(self._morpheme_list)
+        self._morpheme_list.append(morpheme)
+        self._morpheme_set.add(morpheme)
+        self._morpheme_lookup[morpheme] = idx
+        return idx
+    
+    def list_morphemes(self) -> list[str]:
+        return self._morpheme_list

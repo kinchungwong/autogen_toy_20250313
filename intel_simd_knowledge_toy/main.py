@@ -78,6 +78,26 @@ async def simd_keyword_find(pattern: str) -> str:
     except Exception as exc:
         return f"An error occurred: {exc}"
 
+async def simd_keyword_morphemes() -> str:
+    """Lists all of the morphemes found in SIMD keywords. Morphemes refer to the alphanumeric parts of the keywords, separated by underscores
+    """
+    def add_hdiv(lines: list[str]):
+        lines.append("")
+        lines.append("-" * 4)
+        lines.append("")
+    try:
+        spellcheck = get_simd_spellcheck()
+        morphemes = spellcheck.list_morphemes()
+        lines = list[str]()
+        lines.append(f"Listing morphemes found in SIMD keywords:")
+        add_hdiv(lines)
+        lines.append(", ".join(morphemes))
+        add_hdiv(lines)
+        lines.append("End of listing.")
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"An error occurred: {exc}"
+
 
 async def main():
     with tempfile.TemporaryDirectory() as tmpdirname:
@@ -92,7 +112,14 @@ async def main():
 
         tool_simd_keywords_list = FunctionTool(simd_keywords_list, description=simd_keywords_list.__doc__.splitlines()[0])
         tool_simd_keyword_find = FunctionTool(simd_keyword_find, description=simd_keyword_find.__doc__.splitlines()[0])
+        tool_simd_keyword_morphemes = FunctionTool(simd_keyword_morphemes, description=simd_keyword_morphemes.__doc__.splitlines()[0])
         # pprint.pprint(tool_simd_keywords_list.schema)
+
+        tools = [
+            tool_simd_keywords_list, 
+            tool_simd_keyword_find, 
+            tool_simd_keyword_morphemes,
+        ]
 
         buffered_context = BufferedChatCompletionContext(buffer_size=100)
         system_content = """
@@ -112,7 +139,7 @@ Therefore, be familiar with the SIMD keywords before using the tool.
             model_client=cache_client,
             model_context=buffered_context,
             description="A toy agent for exploring SIMD knowledge.",
-            tools=[tool_simd_keywords_list, tool_simd_keyword_find],
+            tools=tools,
             system_message="Use tools to solve tasks."
         )
 
