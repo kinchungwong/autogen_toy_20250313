@@ -1,9 +1,10 @@
-import os
+from pathlib import Path
 from dotenv import load_dotenv
 import asyncio
 import tempfile
 import functools
 import pprint
+import re
 
 from autogen_core import CancellationToken
 from autogen_core.models import SystemMessage, UserMessage
@@ -20,9 +21,52 @@ from diskcache import Cache
 
 from misc.simd_spellcheck import SimdSpellcheck
 
+from intel_simd_knowledge_toy.data_tools.pdf_files.textball import TextBall
+
 @functools.cache
 def get_simd_spellcheck():
     return SimdSpellcheck()
+
+@functools.cache
+def get_simd_textball():
+    cwd = Path.cwd()
+    text_path = cwd / "intel_simd_knowledge_toy" / "data" / "downloads" / "325383-sdm-vol-2abcd-dec-24.txt"
+    textball = TextBall(text_path=text_path)
+    return textball
+
+@functools.cache
+def get_simd_textball_page_count():
+    textball = get_simd_textball()
+    page_count = len(textball)
+    return page_count
+
+@functools.cache
+def get_simd_textball_pages():
+    textball = get_simd_textball()
+    textball_pages = textball.get_pages()
+    page_count = len(textball_pages)
+    textball_pages = [textball_pages[page_idx] for page_idx in range(page_count)]
+    return textball_pages
+
+@functools.cache
+def get_simd_textball_page_lines(page_idx: int):
+    textball_pages = get_simd_textball_pages()
+    page = textball_pages[page_idx]
+    page_lines = [str(page[line_idx]) for line_idx in range(len(page))]
+    return page_lines
+
+@functools.cache
+def get_dotspace_re_repl() -> tuple[re.Pattern, str]:
+    _RE_DOTSPACE = re.compile(r"(?:\.\s){8,}+\.{0,}+")
+    _REPL_DOTSPACE = r"  ...  "
+    return _RE_DOTSPACE, _REPL_DOTSPACE
+
+def replace_dotspace(line):
+    """Replaces excessively long sequences of alternating dots and spaces with an ellipsis."""
+    _RE_DOTSPACE, _REPL_DOTSPACE = get_dotspace_re_repl()
+    line = _RE_DOTSPACE.sub(_REPL_DOTSPACE, line)
+    return line
+
 
 async def simd_keywords_list(start: int, max_to_return: int) -> str:
     """List SIMD keywords from the specified range.
@@ -98,14 +142,61 @@ async def simd_keyword_morphemes() -> str:
     except Exception as exc:
         return f"An error occurred: {exc}"
 
+async def simd_doc_page(page_idx: int) -> str:
+    """Get the text content of a page from the Intel SIMD documentation.
+    Args:
+        page_idx (int): The zero-based index of the page to retrieve.
+    """
+    def add_hdiv(lines: list[str]):
+        lines.append("")
+        lines.append("-" * 4)
+        lines.append("")
+    try:
+        page_count = get_simd_textball_page_count()
+        if page_idx < 0 or page_idx >= page_count:
+            return f"Page index must be in the range [0, {page_count})."
+        page_lines = get_simd_textball_page_lines(page_idx)
+        lines = list[str]()
+        lines.append(f"Listing text content of page {page_idx}:")
+        add_hdiv(lines)
+        lines.extend((line for line in page_lines))
+        add_hdiv(lines)
+        lines.append("End of listing.")
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"An error occurred: {exc}"
+
+async def simd_doc_table_of_contents() -> str:
+    """Get the table of contents from the Intel SIMD documentation.
+    """
+    def add_hdiv(lines: list[str]):
+        lines.append("")
+        lines.append("-" * 4)
+        lines.append("")
+    try:
+        page_first = 3
+        page_last = 28
+        lines = list[str]()
+        lines.append(f"Listing the table of contents from pages {page_first} to {page_last} inclusive:")
+        add_hdiv(lines)
+        for page_idx in range(page_first, page_last + 1):
+            page_lines = get_simd_textball_page_lines(page_idx)
+            for line_idx, line in enumerate(page_lines):
+                line = replace_dotspace(line)
+                lines.append(f"Page {page_idx:5d}, Line {line_idx:5d}: {line}")
+        add_hdiv(lines)
+        lines.append("End of listing.")
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"An error occurred: {exc}"
 
 async def main():
     with tempfile.TemporaryDirectory() as tmpdirname:
         # model = "gpt-4o"
-        # model = "gpt-4o-mini"
+        model = "gpt-4o-mini"
         # model = "o1" ### DOES NOT SUPPORT TOOL
         # model = "o1-mini"
-        model = "o3-mini" ### Answered without using any tool
+        # model = "o3-mini" ### Answered without using any tool
         client = OpenAIChatCompletionClient(model=model)
         cache_store = DiskCacheStore[CHAT_CACHE_VALUE_TYPE](Cache(tmpdirname))
         cache_client = ChatCompletionCache(client, cache_store)
@@ -113,12 +204,16 @@ async def main():
         tool_simd_keywords_list = FunctionTool(simd_keywords_list, description=simd_keywords_list.__doc__.splitlines()[0])
         tool_simd_keyword_find = FunctionTool(simd_keyword_find, description=simd_keyword_find.__doc__.splitlines()[0])
         tool_simd_keyword_morphemes = FunctionTool(simd_keyword_morphemes, description=simd_keyword_morphemes.__doc__.splitlines()[0])
+        tool_simd_doc_page = FunctionTool(simd_doc_page, description=simd_doc_page.__doc__.splitlines()[0])
+        tool_simd_doc_table_of_contents = FunctionTool(simd_doc_table_of_contents, description=simd_doc_table_of_contents.__doc__.splitlines()[0])
         # pprint.pprint(tool_simd_keywords_list.schema)
 
         tools = [
             tool_simd_keywords_list, 
             tool_simd_keyword_find, 
             tool_simd_keyword_morphemes,
+            tool_simd_doc_page,
+            tool_simd_doc_table_of_contents,
         ]
 
         buffered_context = BufferedChatCompletionContext(buffer_size=100)
@@ -150,7 +245,8 @@ Therefore, be familiar with the SIMD keywords before using the tool.
             termination_condition=termination_condition,
         )
 
-        task = "Which of the SIMD shuffle instructions work on 8-bit integers? "
+        # task = "Which of the SIMD shuffle instructions work on 8-bit integers? "
+        task = "On which page can I find the documentation for the ORPS instruction?"
 
         async for message in team.run_stream(task=task):
             print("======", type(message).__name__, "======")
